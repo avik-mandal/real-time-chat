@@ -1,4 +1,4 @@
-import mongoose, { Schema, Document, Model } from 'mongoose';
+import mongoose, { Schema, Document, Model } from "mongoose";
 
 export interface IMessage extends Document {
   sender: string;
@@ -6,9 +6,9 @@ export interface IMessage extends Document {
   timestamp: Date;
   createdAt: Date;
   fileUrl?: string;
-  fileType?: 'image' | 'video';
+  fileType?: "image" | "video";
   fileName?: string;
-  readBy?: string[]; // Array of user IDs who have read the message
+  readBy?: string[];
 }
 
 const MessageSchema: Schema = new Schema(
@@ -20,7 +20,7 @@ const MessageSchema: Schema = new Schema(
     },
     text: {
       type: String,
-      default: '',
+      default: "",
       trim: true,
     },
     timestamp: {
@@ -33,7 +33,7 @@ const MessageSchema: Schema = new Schema(
     },
     fileType: {
       type: String,
-      enum: ['image', 'video'],
+      enum: ["image", "video"],
       default: null,
     },
     fileName: {
@@ -46,18 +46,14 @@ const MessageSchema: Schema = new Schema(
     },
   },
   {
-    timestamps: true, // This adds createdAt and updatedAt automatically
+    timestamps: true,
   }
 );
 
-// Create index for faster queries
 MessageSchema.index({ timestamp: -1 });
 
 const Message: Model<IMessage> =
-  mongoose.models.Message || mongoose.model<IMessage>('Message', MessageSchema);
+  mongoose.models.Message ||
+  mongoose.model<IMessage>("Message", MessageSchema);
 
 export default Message;
-
-// For CommonJS compatibility (server.js)
-module.exports = { default: Message, IMessage };
-
