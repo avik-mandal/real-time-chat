@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
-import { useSearchParams } from "next/navigation";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import { socket } from "@/lib/socket";
 
 interface Message {
@@ -17,11 +17,13 @@ interface Message {
 }
 
 export default function Chat() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const user = searchParams.get("user");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const [msg, setMsg] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -29,13 +31,41 @@ export default function Chat() {
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [preview, setPreview] = useState<{ url: string; type: string; file: File } | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [checkingAuth, setCheckingAuth] = useState(true);
+  const [loadingMessages, setLoadingMessages] = useState(true);
+  const [isTyping, setIsTyping] = useState(false);
+
+  // Check authentication on mount
+  useEffect(() => {
+    const checkAuth = () => {
+      const authStatus = localStorage.getItem("isAuthenticated");
+      const storedUsername = localStorage.getItem("username");
+      
+      if (authStatus !== "true") {
+        router.push("/login");
+        return;
+      }
+      
+      if (user !== storedUsername && storedUsername) {
+        router.push(`/chat?user=${encodeURIComponent(storedUsername)}`);
+        return;
+      }
+      
+      setIsAuthenticated(true);
+      setCheckingAuth(false);
+    };
+
+    checkAuth();
+  }, [router, user]);
 
   // Load previous messages from API
   useEffect(() => {
-    if (!user) return;
+    if (!user || !isAuthenticated) return;
 
     const loadPreviousMessages = async () => {
       try {
+        setLoadingMessages(true);
         const response = await fetch("/api/messages?limit=50");
         const data = await response.json();
         
@@ -51,15 +81,26 @@ export default function Chat() {
             readBy: m.readBy || [],
           }));
           setMessages(formattedMessages);
-          console.log(`📜 Loaded ${formattedMessages.length} previous messages from database`);
         }
       } catch (error) {
         console.error("Error loading previous messages:", error);
+      } finally {
+        setLoadingMessages(false);
       }
     };
 
     loadPreviousMessages();
-  }, [user]);
+  }, [user, isAuthenticated]);
+
+  // Auto-scroll to bottom with debounce
+  const scrollToBottom = useCallback((smooth = true) => {
+    if (scrollTimeoutRef.current) {
+      clearTimeout(scrollTimeoutRef.current);
+    }
+    scrollTimeoutRef.current = setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: smooth ? "smooth" : "auto" });
+    }, 100);
+  }, []);
 
   // Mark messages as read when they come into view
   useEffect(() => {
@@ -81,17 +122,23 @@ export default function Chat() {
           }
         });
       },
-      { threshold: 0.5 }
+      { threshold: 0.5, rootMargin: "0px 0px -50px 0px" }
     );
 
     const messageElements = document.querySelectorAll("[data-message-id]");
     messageElements.forEach((el) => observer.observe(el));
 
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (scrollTimeoutRef.current) {
+        clearTimeout(scrollTimeoutRef.current);
+      }
+    };
   }, [messages, user, isConnected]);
 
+  // Socket connection management
   useEffect(() => {
-    if (!user) return;
+    if (!user || !isAuthenticated) return;
 
     const socketInstance = socket;
     if (!socketInstance) {
@@ -100,14 +147,12 @@ export default function Chat() {
     }
 
     const handleConnect = () => {
-      console.log("✅ Connected to server");
       setIsConnected(true);
       setConnectionError(null);
       socketInstance.emit("join", user);
     };
 
     const handleDisconnect = (reason: string) => {
-      console.log("❌ Disconnected from server:", reason);
       setIsConnected(false);
       if (reason === "io server disconnect") {
         setConnectionError("Server disconnected. Please refresh the page.");
@@ -115,13 +160,11 @@ export default function Chat() {
     };
 
     const handleConnectError = (error: Error) => {
-      console.error("❌ Connection error:", error);
       setConnectionError("Failed to connect to server. Make sure the server is running.");
       setIsConnected(false);
     };
 
     const handleReceiveMessage = (m: Message) => {
-      console.log("📨 Received message:", m);
       setMessages((prev) => {
         const exists = prev.some(
           (msg) =>
@@ -137,7 +180,6 @@ export default function Chat() {
     };
 
     const handlePreviousMessages = (previousMessages: Message[]) => {
-      console.log("📜 Received previous messages from server:", previousMessages.length);
       setMessages((prev) => {
         const existing = new Set(prev.map((m) => m._id || `${m.sender}-${m.text}-${m.timestamp}`));
         const newMessages = previousMessages
@@ -187,32 +229,50 @@ export default function Chat() {
       socketInstance.off("previous-messages", handlePreviousMessages);
       socketInstance.off("message-read", handleMessageRead);
     };
-  }, [user]);
+  }, [user, isAuthenticated]);
 
+  // Auto-scroll when new messages arrive
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    if (messages.length > 0) {
+      scrollToBottom();
+    }
+  }, [messages, scrollToBottom]);
 
-  const getInitials = (name: string) => {
+  // Utility functions
+  const getInitials = useCallback((name: string) => {
     return name
       .split(" ")
       .map((n) => n[0])
       .join("")
       .toUpperCase()
       .slice(0, 2);
-  };
+  }, []);
 
-  const formatTime = (timestamp?: number) => {
+  const formatTime = useCallback((timestamp?: number) => {
     if (!timestamp) return "";
     const date = new Date(timestamp);
-    return date.toLocaleTimeString("en-US", {
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+    const minutes = Math.floor(diff / 60000);
+    
+    if (minutes < 1) return "Just now";
+    if (minutes < 60) return `${minutes}m ago`;
+    if (date.toDateString() === now.toDateString()) {
+      return date.toLocaleTimeString("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      });
+    }
+    return date.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
       hour: "numeric",
       minute: "2-digit",
-      hour12: true,
     });
-  };
+  }, []);
 
-  const shouldShowAvatar = (currentIndex: number) => {
+  const shouldShowAvatar = useCallback((currentIndex: number) => {
     if (currentIndex === 0) return true;
     const currentMsg = messages[currentIndex];
     const previousMsg = messages[currentIndex - 1];
@@ -222,9 +282,9 @@ export default function Chat() {
         previousMsg.timestamp &&
         currentMsg.timestamp - previousMsg.timestamp > 300000)
     );
-  };
+  }, [messages]);
 
-  const shouldShowTimestamp = (currentIndex: number) => {
+  const shouldShowTimestamp = useCallback((currentIndex: number) => {
     if (currentIndex === 0) return true;
     const currentMsg = messages[currentIndex];
     const previousMsg = messages[currentIndex - 1];
@@ -234,9 +294,9 @@ export default function Chat() {
         previousMsg.timestamp &&
         currentMsg.timestamp - previousMsg.timestamp > 300000)
     );
-  };
+  }, [messages]);
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -248,11 +308,25 @@ export default function Chat() {
       return;
     }
 
+    // Check file size
+    const maxImageSize = 10 * 1024 * 1024; // 10MB
+    const maxVideoSize = 50 * 1024 * 1024; // 50MB
+    
+    if (isImage && file.size > maxImageSize) {
+      alert("Image size must be less than 10MB");
+      return;
+    }
+    
+    if (isVideo && file.size > maxVideoSize) {
+      alert("Video size must be less than 50MB");
+      return;
+    }
+
     const url = URL.createObjectURL(file);
     setPreview({ url, type: (isImage ? "image" : "video") as "image" | "video", file });
-  };
+  }, []);
 
-  const uploadFile = async (file: File, fileType: "image" | "video") => {
+  const uploadFile = useCallback(async (file: File, fileType: "image" | "video") => {
     try {
       setUploading(true);
       const formData = new FormData();
@@ -278,9 +352,9 @@ export default function Chat() {
     } finally {
       setUploading(false);
     }
-  };
+  }, []);
 
-  const send = async () => {
+  const send = useCallback(async () => {
     const socketInstance = socket;
     if (!socketInstance || !socketInstance.connected) {
       alert("Not connected to server. Please wait for connection.");
@@ -291,7 +365,6 @@ export default function Chat() {
     let fileType: "image" | "video" | undefined = undefined;
     let fileName: string | undefined = undefined;
 
-    // Upload file if preview exists
     if (preview) {
       fileUrl = await uploadFile(preview.file, preview.type as "image" | "video");
       if (!fileUrl) {
@@ -303,7 +376,6 @@ export default function Chat() {
       setPreview(null);
     }
 
-    // Don't send if no text and no file
     if (!msg.trim() && !fileUrl) return;
 
     const message: Message = {
@@ -315,54 +387,89 @@ export default function Chat() {
       fileName,
     };
 
-    console.log("📤 Sending message:", message);
     setMessages((prev) => [...prev, { ...message, self: true, readBy: [] }]);
     socketInstance.emit("send-message", message);
     setMsg("");
     if (fileInputRef.current) fileInputRef.current.value = "";
-  };
+    scrollToBottom(false);
+  }, [msg, preview, user, uploadFile, scrollToBottom]);
 
-  const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyPress = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter" && !e.shiftKey && !uploading) {
       e.preventDefault();
       send();
     }
-  };
+  }, [send, uploading]);
 
-  const isMyMessage = (m: Message) => m.self || m.sender === user;
-  const isRead = (m: Message) => {
+  const handleLogout = useCallback(() => {
+    if (confirm("Are you sure you want to logout?")) {
+      localStorage.removeItem("isAuthenticated");
+      localStorage.removeItem("username");
+      router.push("/login");
+    }
+  }, [router]);
+
+  const isMyMessage = useCallback((m: Message) => m.self || m.sender === user, [user]);
+  
+  const isRead = useCallback((m: Message) => {
     if (!m._id || !user) return false;
-    const otherUsers = messages
-      .filter((msg) => msg.sender !== user)
-      .map((msg) => msg.sender);
-    const uniqueOtherUsers = Array.from(new Set(otherUsers));
-    return uniqueOtherUsers.every((u) => m.readBy?.includes(u));
-  };
+    const otherUsers = Array.from(new Set(
+      messages.filter((msg) => msg.sender !== user).map((msg) => msg.sender)
+    ));
+    return otherUsers.length > 0 && otherUsers.every((u) => m.readBy?.includes(u));
+  }, [messages, user]);
 
-  if (!user) {
+  // Memoized message groups
+  const messageGroups = useMemo(() => {
+    const groups: { sender: string; messages: Message[]; timestamp: number }[] = [];
+    
+    messages.forEach((msg) => {
+      const lastGroup = groups[groups.length - 1];
+      if (
+        lastGroup &&
+        lastGroup.sender === msg.sender &&
+        msg.timestamp &&
+        lastGroup.timestamp &&
+        msg.timestamp - lastGroup.timestamp < 300000
+      ) {
+        lastGroup.messages.push(msg);
+      } else {
+        groups.push({
+          sender: msg.sender,
+          messages: [msg],
+          timestamp: msg.timestamp || Date.now(),
+        });
+      }
+    });
+    
+    return groups;
+  }, [messages]);
+
+  // Loading state
+  if (checkingAuth) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-100 dark:bg-gray-900">
-        <div className="text-center p-8 bg-white dark:bg-gray-800 rounded-lg shadow-lg">
-          <p className="text-xl text-gray-800 dark:text-white mb-2">
-            Please provide a user parameter
-          </p>
-          <p className="text-sm text-gray-600 dark:text-gray-400">
-            Example: <code className="bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded">?user=John</code>
-          </p>
+        <div className="text-center">
+          <div className="w-16 h-16 mx-auto mb-4 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-gray-600 dark:text-gray-400">Checking authentication...</p>
         </div>
       </div>
     );
   }
 
+  if (!isAuthenticated || !user) {
+    return null;
+  }
+
   return (
-    <div className="flex flex-col h-screen bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800">
+    <div className="flex flex-col h-screen bg-gradient-to-br from-gray-50 via-blue-50/30 to-gray-100 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 overflow-hidden">
       {/* Connection Status Banner */}
       {!isConnected && (
-        <div className="bg-yellow-100 dark:bg-yellow-900 border-b border-yellow-300 dark:border-yellow-700 px-4 py-2 z-20">
+        <div className="bg-yellow-100 dark:bg-yellow-900/30 border-b border-yellow-300 dark:border-yellow-700 px-4 py-2.5 z-20 animate-slide-down">
           <div className="max-w-4xl mx-auto flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse"></div>
-              <p className="text-sm text-yellow-800 dark:text-yellow-200">
+              <p className="text-sm text-yellow-800 dark:text-yellow-200 font-medium">
                 {connectionError || "Connecting to server... Please wait."}
               </p>
             </div>
@@ -373,7 +480,7 @@ export default function Chat() {
                   socketInstance.connect();
                 }
               }}
-              className="text-xs px-3 py-1 bg-yellow-500 hover:bg-yellow-600 text-yellow-900 rounded-md transition-colors"
+              className="text-xs px-3 py-1.5 bg-yellow-500 hover:bg-yellow-600 text-yellow-900 rounded-md transition-colors font-medium"
             >
               Retry
             </button>
@@ -382,30 +489,53 @@ export default function Chat() {
       )}
 
       {/* Header */}
-      <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-4 py-3 shadow-sm z-10">
+      <div className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-md border-b border-gray-200/50 dark:border-gray-700/50 px-4 py-3 shadow-sm z-10">
         <div className="flex items-center justify-between max-w-4xl mx-auto">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white font-semibold shadow-md">
+            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-semibold shadow-lg ring-2 ring-white dark:ring-gray-800">
               {getInitials(user)}
             </div>
             <div>
               <h2 className="text-lg font-semibold text-gray-800 dark:text-white">
-                Chat as <span className="text-blue-600 dark:text-blue-400 ml-1">{user}</span>
+                {user}
               </h2>
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                {isConnected ? "Online" : "Connecting..."}
+              <p className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1">
+                <span className={`w-1.5 h-1.5 rounded-full ${isConnected ? "bg-green-500 animate-pulse" : "bg-gray-400"}`}></span>
+                {isConnected ? "Online" : "Offline"}
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <div
-              className={`w-2.5 h-2.5 rounded-full ${
-                isConnected ? "bg-green-500 animate-pulse" : "bg-red-500"
-              }`}
-            ></div>
-            <span className="text-sm text-gray-600 dark:text-gray-400">
-              {isConnected ? "Connected" : "Disconnected"}
-            </span>
+          <div className="flex items-center gap-3">
+            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-gray-100 dark:bg-gray-700 rounded-lg">
+              <div
+                className={`w-2 h-2 rounded-full ${
+                  isConnected ? "bg-green-500 animate-pulse" : "bg-red-500"
+                }`}
+              ></div>
+              <span className="text-xs text-gray-600 dark:text-gray-400 font-medium">
+                {isConnected ? "Connected" : "Disconnected"}
+              </span>
+            </div>
+            <button
+              onClick={handleLogout}
+              className="p-2 text-gray-600 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-all duration-200"
+              title="Logout"
+              aria-label="Logout"
+            >
+              <svg
+                className="w-5 h-5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
+                />
+              </svg>
+            </button>
           </div>
         </div>
       </div>
@@ -413,44 +543,54 @@ export default function Chat() {
       {/* Messages Container */}
       <div
         ref={messagesContainerRef}
-        className="flex-1 overflow-y-auto px-2 sm:px-4 py-4"
+        className="flex-1 overflow-y-auto px-2 sm:px-4 py-4 scroll-smooth"
       >
-        <div className="max-w-4xl mx-auto space-y-1">
-          {messages.length === 0 ? (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-center">
-                <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
-                  <svg
-                    className="w-8 h-8 text-gray-400"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
-                    />
-                  </svg>
-                </div>
-                <p className="text-gray-500 dark:text-gray-400">
-                  No messages yet. Start the conversation!
-                </p>
-              </div>
+        {loadingMessages ? (
+          <div className="flex items-center justify-center h-full">
+            <div className="text-center">
+              <div className="w-12 h-12 mx-auto mb-4 border-3 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+              <p className="text-gray-500 dark:text-gray-400">Loading messages...</p>
             </div>
-          ) : (
-            messages.map((m, i) => {
+          </div>
+        ) : messages.length === 0 ? (
+          <div className="flex items-center justify-center h-full">
+            <div className="text-center max-w-sm">
+              <div className="w-20 h-20 mx-auto mb-4 rounded-full bg-gradient-to-br from-blue-100 to-indigo-100 dark:from-blue-900/30 dark:to-indigo-900/30 flex items-center justify-center">
+                <svg
+                  className="w-10 h-10 text-blue-500 dark:text-blue-400"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+                  />
+                </svg>
+              </div>
+              <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-2">
+                No messages yet
+              </h3>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                Start the conversation by sending a message!
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="max-w-4xl mx-auto space-y-1">
+            {messages.map((m, i) => {
               const isMine = isMyMessage(m);
               const showAvatar = !isMine && shouldShowAvatar(i);
               const showTimestamp = shouldShowTimestamp(i);
               const read = isRead(m);
 
               return (
-                <div key={m._id || i} className="space-y-1">
+                <div key={m._id || `${m.sender}-${i}`} className="space-y-1">
                   {showTimestamp && (
-                    <div className="flex justify-center my-2">
-                      <span className="text-xs text-gray-500 dark:text-gray-400 bg-white dark:bg-gray-800 px-2 py-1 rounded-full">
+                    <div className="flex justify-center my-3">
+                      <span className="text-xs text-gray-500 dark:text-gray-400 bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm px-3 py-1 rounded-full border border-gray-200 dark:border-gray-700">
                         {formatTime(m.timestamp)}
                       </span>
                     </div>
@@ -465,7 +605,7 @@ export default function Chat() {
                     {!isMine && (
                       <div className="flex-shrink-0">
                         {showAvatar ? (
-                          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-gray-400 to-gray-500 flex items-center justify-center text-white text-xs font-semibold">
+                          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-gray-400 to-gray-500 flex items-center justify-center text-white text-xs font-semibold shadow-md ring-2 ring-white dark:ring-gray-800">
                             {getInitials(m.sender)}
                           </div>
                         ) : (
@@ -480,32 +620,34 @@ export default function Chat() {
                       }`}
                     >
                       {!isMine && showAvatar && (
-                        <span className="text-xs font-medium text-gray-600 dark:text-gray-300 mb-1 px-1">
+                        <span className="text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1 px-1.5">
                           {m.sender}
                         </span>
                       )}
                       <div
-                        className={`relative px-4 py-2.5 rounded-2xl shadow-sm ${
+                        className={`relative px-4 py-2.5 rounded-2xl shadow-md hover:shadow-lg transition-all duration-200 ${
                           isMine
-                            ? "bg-blue-500 text-white rounded-br-md"
+                            ? "bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-br-md"
                             : "bg-white dark:bg-gray-700 text-gray-800 dark:text-white rounded-bl-md border border-gray-200 dark:border-gray-600"
                         }`}
                       >
                         {/* File Display */}
                         {m.fileUrl && (
-                          <div className="mb-2 rounded-lg overflow-hidden">
+                          <div className="mb-2 rounded-lg overflow-hidden -mx-1">
                             {m.fileType === "image" ? (
                               <img
                                 src={m.fileUrl}
                                 alt={m.fileName || "Image"}
-                                className="max-w-full h-auto max-h-64 object-cover cursor-pointer"
+                                className="max-w-full h-auto max-h-64 object-cover cursor-pointer hover:opacity-90 transition-opacity"
                                 onClick={() => window.open(m.fileUrl, "_blank")}
+                                loading="lazy"
                               />
                             ) : (
                               <video
                                 src={m.fileUrl}
                                 controls
-                                className="max-w-full h-auto max-h-64"
+                                className="max-w-full h-auto max-h-64 rounded-lg"
+                                preload="metadata"
                               >
                                 Your browser does not support video playback.
                               </video>
@@ -521,7 +663,7 @@ export default function Chat() {
                         )}
 
                         {/* Timestamp and Read Status */}
-                        <div className="flex items-center gap-1 mt-1.5">
+                        <div className="flex items-center gap-1.5 mt-1.5">
                           <div
                             className={`text-xs ${
                               isMine
@@ -532,7 +674,7 @@ export default function Chat() {
                             {formatTime(m.timestamp)}
                           </div>
                           {isMine && (
-                            <div className="flex items-center">
+                            <div className="flex items-center" title={read ? "Read" : "Sent"}>
                               {read ? (
                                 <svg
                                   className="w-4 h-4 text-blue-200"
@@ -568,31 +710,52 @@ export default function Chat() {
                   </div>
                 </div>
               );
-            })
-          )}
-          <div ref={messagesEndRef} />
-        </div>
+            })}
+            <div ref={messagesEndRef} />
+          </div>
+        )}
       </div>
 
       {/* Preview */}
       {preview && (
-        <div className="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 px-4 py-2">
-          <div className="max-w-4xl mx-auto flex items-center gap-2">
-            <div className="flex-1 relative">
+        <div className="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 px-4 py-3 shadow-md">
+          <div className="max-w-4xl mx-auto flex items-center gap-3">
+            <div className="flex-1 relative bg-gray-100 dark:bg-gray-700 rounded-lg p-2 overflow-hidden">
               {preview.type === "image" ? (
                 <img
                   src={preview.url}
                   alt="Preview"
-                  className="max-h-20 w-auto rounded"
+                  className="max-h-24 w-auto rounded-lg object-cover"
                 />
               ) : (
-                <video src={preview.url} className="max-h-20 w-auto rounded" />
+                <video
+                  src={preview.url}
+                  className="max-h-24 w-auto rounded-lg"
+                  controls
+                />
               )}
+            </div>
+            <div className="text-xs text-gray-500 dark:text-gray-400 truncate max-w-[150px]">
+              {preview.file.name}
             </div>
             <button
               onClick={() => setPreview(null)}
-              className="px-3 py-1 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
+              className="px-4 py-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors font-medium text-sm flex items-center gap-1.5"
+              aria-label="Remove preview"
             >
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M6 18L18 6M6 6l12 12"
+                />
+              </svg>
               Remove
             </button>
           </div>
@@ -600,7 +763,7 @@ export default function Chat() {
       )}
 
       {/* Input Area */}
-      <div className="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 px-2 sm:px-4 py-3 shadow-lg">
+      <div className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-md border-t border-gray-200/50 dark:border-gray-700/50 px-2 sm:px-4 py-3 shadow-lg">
         <div className="max-w-4xl mx-auto flex gap-2 items-end">
           <input
             ref={fileInputRef}
@@ -608,11 +771,14 @@ export default function Chat() {
             accept="image/*,video/*"
             onChange={handleFileSelect}
             className="hidden"
+            aria-label="Upload file"
           />
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="px-4 py-3 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-600 rounded-2xl transition-colors"
+            className="px-4 py-3 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-300 rounded-2xl transition-all duration-200 hover:scale-105 active:scale-95 shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
             disabled={uploading}
+            title="Attach file"
+            aria-label="Attach file"
           >
             <svg
               className="w-5 h-5"
@@ -636,12 +802,15 @@ export default function Chat() {
               onKeyPress={handleKeyPress}
               placeholder={preview ? "Add a caption..." : "Type a message..."}
               disabled={uploading}
+              aria-label="Message input"
             />
           </div>
           <button
             onClick={send}
             disabled={(!msg.trim() && !preview) || !isConnected || uploading}
-            className="px-6 py-3 bg-blue-500 hover:bg-blue-600 text-white rounded-2xl font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 shadow-md hover:shadow-lg active:scale-95 flex items-center justify-center min-w-[80px]"
+            className="px-6 py-3 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white rounded-2xl font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 shadow-md hover:shadow-lg active:scale-95 flex items-center justify-center min-w-[80px]"
+            title="Send message"
+            aria-label="Send message"
           >
             {uploading ? (
               <svg

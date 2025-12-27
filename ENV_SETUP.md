@@ -43,15 +43,28 @@ MONGODB_URI=mongodb://localhost:27017/chat-app
 Your `.env.local` file should look like this:
 
 ```env
-# Line 1: MongoDB Connection String (REQUIRED)
+# MongoDB Connection String (REQUIRED)
 MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/chat-app?retryWrites=true&w=majority
 
-# Line 2: Optional - Server hostname
+# Login Credentials (REQUIRED)
+LOGIN_USERNAME=admin
+LOGIN_PASSWORD=admin123
+
+# Optional - Server hostname
 # HOSTNAME=localhost
 
-# Line 3: Optional - Server port
+# Optional - Server port
 # PORT=3000
 ```
+
+## Login Credentials
+
+The app uses static credentials stored in `.env.local`:
+
+- **LOGIN_USERNAME**: The username for login (default: `admin`)
+- **LOGIN_PASSWORD**: The password for login (default: `admin123`)
+
+You can change these to any username and password you prefer. These credentials are used to authenticate users before they can access the chat.
 
 ## Security Notes
 
