@@ -543,7 +543,7 @@ export default function Chat() {
       {/* Messages Container */}
       <div
         ref={messagesContainerRef}
-        className="flex-1 overflow-y-auto px-2 sm:px-4 py-4 scroll-smooth"
+        className="flex-1 overflow-y-auto px-2 sm:px-4 py-6 scroll-smooth"
       >
         {loadingMessages ? (
           <div className="flex items-center justify-center h-full">
@@ -579,7 +579,7 @@ export default function Chat() {
             </div>
           </div>
         ) : (
-          <div className="max-w-4xl mx-auto space-y-1">
+          <div className="max-w-4xl mx-auto space-y-0.5">
             {messages.map((m, i) => {
               const isMine = isMyMessage(m);
               const showAvatar = !isMine && shouldShowAvatar(i);
@@ -587,10 +587,10 @@ export default function Chat() {
               const read = isRead(m);
 
               return (
-                <div key={m._id || `${m.sender}-${i}`} className="space-y-1">
+                <div key={m._id || `${m.sender}-${i}`}>
                   {showTimestamp && (
-                    <div className="flex justify-center my-3">
-                      <span className="text-xs text-gray-500 dark:text-gray-400 bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm px-3 py-1 rounded-full border border-gray-200 dark:border-gray-700">
+                    <div className="flex justify-center my-4">
+                      <span className="text-[11px] text-gray-500 dark:text-gray-400 font-medium">
                         {formatTime(m.timestamp)}
                       </span>
                     </div>
@@ -600,45 +600,46 @@ export default function Chat() {
                     data-message-sender={m.sender}
                     className={`flex items-end gap-2 ${
                       isMine ? "justify-end" : "justify-start"
-                    }`}
+                    } px-2`}
                   >
                     {!isMine && (
-                      <div className="flex-shrink-0">
+                      <div className="flex-shrink-0 mb-0.5">
                         {showAvatar ? (
-                          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-gray-400 to-gray-500 flex items-center justify-center text-white text-xs font-semibold shadow-md ring-2 ring-white dark:ring-gray-800">
+                          <div className="w-7 h-7 rounded-full bg-gradient-to-br from-purple-400 to-pink-500 flex items-center justify-center text-white text-xs font-semibold">
                             {getInitials(m.sender)}
                           </div>
                         ) : (
-                          <div className="w-8 h-8"></div>
+                          <div className="w-7"></div>
                         )}
                       </div>
                     )}
 
                     <div
-                      className={`flex flex-col max-w-[75%] sm:max-w-md ${
+                      className={`flex flex-col max-w-[70%] ${
                         isMine ? "items-end" : "items-start"
                       }`}
                     >
-                      {!isMine && showAvatar && (
-                        <span className="text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1 px-1.5">
-                          {m.sender}
-                        </span>
-                      )}
                       <div
-                        className={`relative px-4 py-2.5 rounded-2xl shadow-md hover:shadow-lg transition-all duration-200 ${
+                        className={`relative group ${
                           isMine
-                            ? "bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-br-md"
-                            : "bg-white dark:bg-gray-700 text-gray-800 dark:text-white rounded-bl-md border border-gray-200 dark:border-gray-600"
+                            ? "bg-blue-500 text-white"
+                            : "bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100 border border-gray-200 dark:border-gray-600"
+                        } ${
+                          m.fileUrl && !m.text
+                            ? "p-0 rounded-2xl overflow-hidden"
+                            : "px-3 py-2 rounded-[18px]"
                         }`}
                       >
                         {/* File Display */}
                         {m.fileUrl && (
-                          <div className="mb-2 rounded-lg overflow-hidden -mx-1">
+                          <div className={m.text ? "mb-1" : ""}>
                             {m.fileType === "image" ? (
                               <img
                                 src={m.fileUrl}
                                 alt={m.fileName || "Image"}
-                                className="max-w-full h-auto max-h-64 object-cover cursor-pointer hover:opacity-90 transition-opacity"
+                                className={`max-w-full h-auto cursor-pointer hover:opacity-95 transition-opacity ${
+                                  m.text ? "rounded-lg max-h-48" : "max-h-64 rounded-2xl"
+                                }`}
                                 onClick={() => window.open(m.fileUrl, "_blank")}
                                 loading="lazy"
                               />
@@ -646,7 +647,9 @@ export default function Chat() {
                               <video
                                 src={m.fileUrl}
                                 controls
-                                className="max-w-full h-auto max-h-64 rounded-lg"
+                                className={`max-w-full h-auto ${
+                                  m.text ? "rounded-lg max-h-48" : "max-h-64 rounded-2xl"
+                                }`}
                                 preload="metadata"
                               >
                                 Your browser does not support video playback.
@@ -657,56 +660,32 @@ export default function Chat() {
 
                         {/* Text Message */}
                         {m.text && (
-                          <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">
+                          <p className="text-[15px] leading-[1.4] break-words whitespace-pre-wrap">
                             {m.text}
                           </p>
                         )}
+                      </div>
 
-                        {/* Timestamp and Read Status */}
-                        <div className="flex items-center gap-1.5 mt-1.5">
-                          <div
-                            className={`text-xs ${
-                              isMine
-                                ? "text-blue-100"
-                                : "text-gray-500 dark:text-gray-400"
-                            }`}
-                          >
-                            {formatTime(m.timestamp)}
+                      {/* Timestamp and Read Status - Outside bubble */}
+                      <div className={`flex items-center gap-1 mt-0.5 px-1 ${isMine ? "flex-row-reverse" : "flex-row"}`}>
+                        {isMine && (
+                          <div className="flex items-center" title={read ? "Seen" : "Sent"}>
+                            {read ? (
+                              <div className="w-3.5 h-3.5 rounded-full bg-gradient-to-br from-purple-400 to-pink-500 flex items-center justify-center">
+                                <svg className="w-2 h-2 text-white" fill="currentColor" viewBox="0 0 20 20">
+                                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                </svg>
+                              </div>
+                            ) : (
+                              <div className="w-3.5 h-3.5 rounded-full border-2 border-gray-400"></div>
+                            )}
                           </div>
-                          {isMine && (
-                            <div className="flex items-center" title={read ? "Read" : "Sent"}>
-                              {read ? (
-                                <svg
-                                  className="w-4 h-4 text-blue-200"
-                                  fill="currentColor"
-                                  viewBox="0 0 20 20"
-                                >
-                                  <path
-                                    fillRule="evenodd"
-                                    d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                                    clipRule="evenodd"
-                                  />
-                                </svg>
-                              ) : (
-                                <svg
-                                  className="w-4 h-4 text-blue-200"
-                                  fill="currentColor"
-                                  viewBox="0 0 20 20"
-                                >
-                                  <path
-                                    fillRule="evenodd"
-                                    d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.469a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                                    clipRule="evenodd"
-                                  />
-                                </svg>
-                              )}
-                            </div>
-                          )}
-                        </div>
+                        )}
+                        <span className="text-[11px] text-gray-500 dark:text-gray-400">
+                          {formatTime(m.timestamp)}
+                        </span>
                       </div>
                     </div>
-
-                    {isMine && <div className="w-8 h-8 flex-shrink-0"></div>}
                   </div>
                 </div>
               );

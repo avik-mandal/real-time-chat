@@ -30,6 +30,31 @@
     background: rgba(75, 85, 99, 0.7);
   }
 }
+/* Subtle chat background pattern */
+.chat-bg {
+  background-color: #f8fafc;
+  background-image:
+    linear-gradient(rgba(0,0,0,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,0,0,0.03) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.dark .chat-bg {
+  background-color: #0f172a;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px);
+}
+
+/* Smooth bubble enter */
+@keyframes slideUp {
+  from { transform: translateY(6px); opacity: 0 }
+  to { transform: translateY(0); opacity: 1 }
+}
+.animate-slideUp {
+  animation: slideUp .18s ease-out;
+}
+
 
 /* Smooth animations */
 @keyframes slide-down {
